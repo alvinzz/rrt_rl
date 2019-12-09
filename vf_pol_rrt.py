@@ -125,10 +125,10 @@ class VfPolRrt:
 				next_state = self.b_dynamics(np.array([current_node.state]), np.array([action]))[0]
 			new_node = Node(next_state, action)
 
-			new_node.parent = current_node
-			new_node.depth = current_node.depth + 1
-			current_node.children.append(new_node)
-			rrt.nodes.append(new_node)
+			# new_node.parent = current_node
+			# new_node.depth = current_node.depth + 1
+			# current_node.children.append(new_node)
+			# rrt.nodes.append(new_node)
 
 			# decide if the new node should be connected to the current node or, if there is a shortcut, rewire
 			new_node_connection, new_node_connection_dist, new_node_total_dist = \
@@ -140,35 +140,35 @@ class VfPolRrt:
 				current_node.children.append(new_node)
 				rrt.nodes.append(new_node)
 			else:
-				# print("new node", new_node.state)
-				# print("current node", current_node.state, current_node.depth, 1)
-				# print("new node connection", new_node_connection.state, new_node_connection.depth, new_node_connection_dist)
+				print("new node", new_node.state)
+				print("current node", current_node.state, current_node.depth, 1)
+				print("new node connection", new_node_connection.state, new_node_connection.depth, new_node_connection_dist)
 				self.connect_target(rrt, new_node, new_node_connection, new_node_connection_dist)
 			print("connected new node", new_node.state)
 			self.plot_rrt()
 
-			# check if other nodes should be rewired through the new one, and rewire if so
-			for node in rrt.nodes:
-				if new_node.depth + 1 < node.depth:
-					if rrt is self.f_rrt:
-						node_thru_new_connection_dist = \
-							-(1. + self.value_fn_uncertainty) * value_fn(np.array([new_node.state]), np.array([node.state]))[0]
-						node_thru_new_dist = node_thru_new_connection_dist + new_node.depth
-					else:
-						node_thru_new_connection_dist = \
-							-(1. + self.value_fn_uncertainty) * value_fn(np.array([node.state]), np.array([new_node.state]))[0]
-						node_thru_new_dist = node_thru_new_connection_dist + new_node.depth
+			# # check if other nodes should be rewired through the new one, and rewire if so
+			# for node in rrt.nodes:
+			# 	if new_node.depth + 1 < node.depth:
+			# 		if rrt is self.f_rrt:
+			# 			node_thru_new_connection_dist = \
+			# 				-(1. + self.value_fn_uncertainty) * value_fn(np.array([new_node.state]), np.array([node.state]))[0]
+			# 			node_thru_new_dist = node_thru_new_connection_dist + new_node.depth
+			# 		else:
+			# 			node_thru_new_connection_dist = \
+			# 				-(1. + self.value_fn_uncertainty) * value_fn(np.array([node.state]), np.array([new_node.state]))[0]
+			# 			node_thru_new_dist = node_thru_new_connection_dist + new_node.depth
 
-					if node_thru_new_dist + 1 < node.depth:
-						print("rewiring:")
-						print("node", node.state, node.depth)
-						print("thru new node", new_node.state, new_node.depth, node_thru_new_connection_dist)
-						try:
-							node.parent.children.remove(node)
-							self.connect_target(rrt, node, new_node, node_thru_new_connection_dist)
-						except:
-							pass
-						self.plot_rrt()
+			# 		if node_thru_new_dist + 1 < node.depth:
+			# 			print("rewiring:")
+			# 			print("node", node.state, node.depth)
+			# 			print("thru new node", new_node.state, new_node.depth, node_thru_new_connection_dist)
+			# 			try:
+			# 				node.parent.children.remove(node)
+			# 				self.connect_target(rrt, node, new_node, node_thru_new_connection_dist)
+			# 			except:
+			# 				pass
+			# 			self.plot_rrt()
 
 			current_node = new_node
 			# self.plot_rrt()
