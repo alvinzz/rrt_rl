@@ -103,6 +103,7 @@ class WallPointEnv:
             self.point = line_intersections[np.argmin(line_distances)]
         else:
             self.point = np.clip(next_point, -2.5, 2.5)
+        # self.point = np.clip(next_point, -2.5, 2.5)
 
         return self.get_obs(), 0, False, {}
 

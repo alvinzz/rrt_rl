@@ -6,13 +6,26 @@ class Tree():
 		self.root = start_node
 		self.nodes = [start_node]
 
-class Node():
-	def __init__(self, state, action):
-		self.parent = None
-		self.children = []
-		self.depth = 0
+	def get_leaves(self):
+		return list(filter(lambda node: not node.children, self.nodes))
 
-		self.best_child = None
+class Node():
+	def __init__(self, state, action, parent=None):
+		self.parent = parent
+		if parent is None:
+			self.tree = Tree(self)
+			self.depth = 0
+		else:
+			self.parent.children.append(self)
+			self.tree = parent.tree
+			self.tree.nodes.append(self)
+			self.depth = self.parent.depth + 1
+			
+		self.children = []
+
+		self.f_connection = None
+		self.b_connection = None
+
 		self.dist_to_start = 0
 		self.dist_to_goal = 0
 
@@ -41,49 +54,95 @@ class VfPolRrt:
 		self.value_fn = value_fn
 
 		# TODO: keep track of many forward/backward trees
-		start_node = Node(start_state, None)
-		# self.f_rrts = [Tree(start_node)]
-		self.f_rrt = Tree(start_node)
-		goal_node = Node(goal_state, None)
-		# self.b_rrts = [Tree(goal_node)]
-		self.b_rrt = Tree(goal_node)
+		start_node = Node(start_state, None, None)
+		self.f_rrts = [start_node.tree]
+		goal_node = Node(goal_state, None, None)
+		self.b_rrts = [goal_node.tree]
 
 		self.n_target_samples = n_target_samples
 		self.temperature = temperature
 
 		self.value_fn_uncertainty = value_fn_uncertainty
 
-	def find_path(self):
-		pass
-
-	def execute_path(self):
-		pass
-
-	def get_node_values(self):
-		pass
-
 	def build_rrt(self, n_samples=1):
 		for sample_n in range(n_samples):
-			target_state = self.get_target_state()
-			target = Node(target_state, None)
+			target_state, f_connection, b_connection = self.get_target_state()
+			print("target_state:", target_state)
+			print("f_connection:", f_connection.state)
+			print("b_connection:", b_connection.state)
+			f_target = Node(target_state, None, None)
+			f_target.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([f_target.state]))[0]
+			f_target.dist_to_goal = -1 * value_fn(np.array([f_target.state]), np.array([self.b_rrts[0].root.state]))[0]
+			b_target = Node(target_state, None, None)
+			b_target.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([b_target.state]))[0]
+			b_target.dist_to_goal = -1 * value_fn(np.array([b_target.state]), np.array([self.b_rrts[0].root.state]))[0]
 
-			self.connect_target(self.f_rrt, target)
-			self.connect_target(self.b_rrt, target)
+			self.f_rrts.append(f_target.tree)
+			self.b_rrts.append(b_target.tree)
 
-		cv2.waitKey(0)
+			f_dist = -1 * self.value_fn(np.array([f_connection.state]), np.array([target_state]))[0]
+			b_dist = -1 * self.value_fn(np.array([target_state]), np.array([b_connection.state]))[0]
+
+			f_rrt_node = f_connection
+			target_node = b_target
+			print("f_dist:", f_dist)
+			for t in range(int(np.ceil(f_dist/2))):
+				f_action = self.f_policy(np.array([f_rrt_node.state]), np.array([target_state]))[0]
+				f_rrt_next_state = self.f_dynamics(np.array([f_rrt_node.state]), np.array([f_action]))[0]
+				f_rrt_node = Node(f_rrt_next_state, f_action, f_rrt_node)
+				f_rrt_node.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([f_rrt_node.state]))[0]
+				f_rrt_node.dist_to_goal = -1 * value_fn(np.array([f_rrt_node.state]), np.array([self.b_rrts[0].root.state]))[0]
+				# print(f_rrt_node.dist_to_start, f_rrt_node.dist_to_goal)
+
+				target_action = self.b_policy(np.array([f_connection.state]), np.array([target_node.state]))[0]
+				target_rrt_next_state = self.b_dynamics(np.array([target_node.state]), np.array([target_action]))[0]
+				target_node = Node(target_rrt_next_state, target_action, target_node)
+				target_node.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([target_node.state]))[0]
+				target_node.dist_to_goal = -1 * value_fn(np.array([target_node.state]), np.array([self.b_rrts[0].root.state]))[0]
+				# print(target_node.dist_to_start, target_node.dist_to_goal)
+
+				self.plot_rrt()
+			b_rrt_node = b_connection
+			target_node = f_target
+			print("b_dist:", b_dist)
+			for t in range(int(np.ceil(b_dist/2))):
+				b_action = self.b_policy(np.array([target_state]), np.array([b_rrt_node.state]))[0]
+				b_rrt_next_state = self.b_dynamics(np.array([b_rrt_node.state]), np.array([b_action]))[0]
+				b_rrt_node = Node(b_rrt_next_state, b_action, b_rrt_node)
+				b_rrt_node.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([b_rrt_node.state]))[0]
+				b_rrt_node.dist_to_goal = -1 * value_fn(np.array([b_rrt_node.state]), np.array([self.b_rrts[0].root.state]))[0]
+				# print(b_rrt_node.dist_to_start, b_rrt_node.dist_to_goal)
+
+				target_action = self.f_policy(np.array([target_node.state]), np.array([b_connection.state]))[0]
+				target_rrt_next_state = self.f_dynamics(np.array([target_node.state]), np.array([target_action]))[0]
+				target_node = Node(target_rrt_next_state, target_action, target_node)
+				target_node.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([target_node.state]))[0]
+				target_node.dist_to_goal = -1 * value_fn(np.array([target_node.state]), np.array([self.b_rrts[0].root.state]))[0]
+				# print(target_node.dist_to_start, target_node.dist_to_goal)
+
+				self.plot_rrt()
+				
+			# for f_rrt in self.f_rrts:
+			# 	print([node.state for node in f_rrt.nodes])
+			# for b_rrt in self.b_rrts:
+			# 	print([node.state for node in b_rrt.nodes])
+			# self.plot_rrt()
+
+		cv2.waitKey(1)
 		cv2.destroyWindow("rrt_plot")
-
-		return self.f_rrt, self.b_rrt
 
 	def plot_rrt(self, dim1=0, dim2=1):
 		imsize = 500
-		im = np.zeros((imsize, imsize))
-		im = self.plot_tree(self.f_rrt.root, im, dim1, dim2)
-		# im = self.plot_tree(self.b_rrt.root, im, dim1, dim2)
-		cv2.imshow("rrt_plot", im)
-		cv2.waitKey(1)
+		im = np.zeros((imsize, imsize, 3))
+		for rrt in self.f_rrts:
+			im = self.plot_tree(rrt.root, im, dim1, dim2, c=[255, 0, 0])
+		for rrt in self.b_rrts:
+			im = self.plot_tree(rrt.root, im, dim1, dim2, c=[0, 0, 255])
 
-	def plot_tree(self, node, im, dim1=0, dim2=1):
+		cv2.imshow("rrt_plot", im)
+		cv2.waitKey(0)
+
+	def plot_tree(self, node, im, dim1=0, dim2=1, c=[255, 255, 255]):
 		for child in node.children:
 			x1 = int(im.shape[0] \
 				* (node.state[dim1] - self.env.ob_bounds[0][dim1]) \
@@ -99,127 +158,83 @@ class VfPolRrt:
 				* (self.env.ob_bounds[1][dim2] - child.state[dim2]) \
 				/ (self.env.ob_bounds[1][dim2] - self.env.ob_bounds[0][dim2]))
 
-			im = cv2.line(im, (x1, y1), (x2, y2), 1)
+			im = cv2.line(im, (x1, y1), (x2, y2), c)
 
-			im = self.plot_tree(child, im, dim1, dim2)
+			im = self.plot_tree(child, im, dim1, dim2, c)
 
 		return im
 
-	def connect_target(self, rrt, target, connection=None, connection_dist=0):
-		# get connection if not pre-specified
-		if connection is None:
-			connection, connection_dist, dist = \
-				self.get_connection(rrt, target)
-			connection = connection
-			connection_dist = connection_dist
+	def get_all_nodes(self):
+		f_rrt_nodes = []
+		for f_rrt in self.f_rrts:
+			f_rrt_nodes.extend(f_rrt.nodes)
 
-		# attempt to connect by rolling out policy
-		current_node = connection
-		for t in range(int(np.ceil(connection_dist))):
-			# get new node on path from connection to target
-			if rrt is self.f_rrt:
-				action = self.f_policy(np.array([current_node.state]), np.array([target.state]))[0]
-				next_state = self.f_dynamics(np.array([current_node.state]), np.array([action]))[0]
-			else:
-				action = self.b_policy(np.array([target.state]), np.array([current_node.state]))[0]
-				next_state = self.b_dynamics(np.array([current_node.state]), np.array([action]))[0]
-			new_node = Node(next_state, action)
+		b_rrt_nodes = []
+		for b_rrt in self.b_rrts:
+			b_rrt_nodes.extend(b_rrt.nodes)
 
-			# new_node.parent = current_node
-			# new_node.depth = current_node.depth + 1
-			# current_node.children.append(new_node)
-			# rrt.nodes.append(new_node)
+		return f_rrt_nodes, b_rrt_nodes
 
-			# decide if the new node should be connected to the current node or, if there is a shortcut, rewire
-			new_node_connection, new_node_connection_dist, new_node_total_dist = \
-				self.get_connection(rrt, new_node)
-			if (new_node_connection is current_node) or \
-			not (new_node_total_dist + 1 < current_node.depth + 1):
-				new_node.parent = current_node
-				new_node.depth = current_node.depth + 1
-				current_node.children.append(new_node)
-				rrt.nodes.append(new_node)
-			else:
-				print("new node", new_node.state)
-				print("current node", current_node.state, current_node.depth, 1)
-				print("new node connection", new_node_connection.state, new_node_connection.depth, new_node_connection_dist)
-				self.connect_target(rrt, new_node, new_node_connection, new_node_connection_dist)
-			print("connected new node", new_node.state)
-			self.plot_rrt()
+	def get_all_leaves(self):
+		f_rrt_leaves = []
+		for f_rrt in self.f_rrts:
+			f_rrt_leaves.extend(f_rrt.get_leaves())
 
-			# # check if other nodes should be rewired through the new one, and rewire if so
-			# for node in rrt.nodes:
-			# 	if new_node.depth + 1 < node.depth:
-			# 		if rrt is self.f_rrt:
-			# 			node_thru_new_connection_dist = \
-			# 				-(1. + self.value_fn_uncertainty) * value_fn(np.array([new_node.state]), np.array([node.state]))[0]
-			# 			node_thru_new_dist = node_thru_new_connection_dist + new_node.depth
-			# 		else:
-			# 			node_thru_new_connection_dist = \
-			# 				-(1. + self.value_fn_uncertainty) * value_fn(np.array([node.state]), np.array([new_node.state]))[0]
-			# 			node_thru_new_dist = node_thru_new_connection_dist + new_node.depth
+		b_rrt_leaves = []
+		for b_rrt in self.b_rrts:
+			b_rrt_leaves.extend(b_rrt.get_leaves())
 
-			# 		if node_thru_new_dist + 1 < node.depth:
-			# 			print("rewiring:")
-			# 			print("node", node.state, node.depth)
-			# 			print("thru new node", new_node.state, new_node.depth, node_thru_new_connection_dist)
-			# 			try:
-			# 				node.parent.children.remove(node)
-			# 				self.connect_target(rrt, node, new_node, node_thru_new_connection_dist)
-			# 			except:
-			# 				pass
-			# 			self.plot_rrt()
-
-			current_node = new_node
-			# self.plot_rrt()
-
-		# # connect target's children, if any
-		# for child in target.children:
-		# 	target.children.remove(child)
-		# 	self.connect_target(rrt, child)
-
-	def get_connection(self, rrt, target):
-		rrt_states = np.array([node.state for node in rrt.nodes])
-
-		if rrt is self.f_rrt:
-			values = value_fn(rrt_states, np.array([target.state]))
-		else:
-			values = value_fn(np.array([target.state]), rrt_states)
-
-		dists = -(1. + self.value_fn_uncertainty) * values + \
-			np.array([node.depth for node in rrt.nodes])
-
-		best_idx = np.argmin(dists)
-		connection = rrt.nodes[best_idx]
-		connection_dist = -(1. + self.value_fn_uncertainty) * values[best_idx]
-		dist = dists[best_idx]
-
-		return connection, connection_dist, dist
+		return f_rrt_leaves, b_rrt_leaves
 
 	def get_target_state(self):
-		# alternatively, use CEM to improve, but probably not necessary
 		proposed_states = np.random.uniform(
 			self.env.ob_bounds[0], self.env.ob_bounds[1],
 			size=(self.n_target_samples, self.env.ob_bounds[0].shape[0]))
 
-		f_rrt_states = np.array([node.state for node in self.f_rrt.nodes])
-		b_rrt_states = np.array([node.state for node in self.b_rrt.nodes])
+		f_rrt_nodes, b_rrt_nodes = self.get_all_nodes()
+
+		f_rrt_states = np.array([node.state for node in f_rrt_nodes])
+		f_rrt_states_dist_to_start = np.array([node.dist_to_start for node in f_rrt_nodes])
+		b_rrt_states = np.array([node.state for node in b_rrt_nodes])
+		b_rrt_states_dist_to_goal = np.array([node.dist_to_goal for node in b_rrt_nodes])
 
 		proposed_state_scores = np.zeros(self.n_target_samples)
-		for (idx, proposed_state) in enumerate(proposed_states):
-			f_rrt_max_value = np.max(value_fn(f_rrt_states, np.array([proposed_state])))
-			b_rrt_max_value = np.max(value_fn(np.array([proposed_state]), b_rrt_states))
+		proposed_f_connections = []
+		proposed_b_connections = []
 
-			proposed_state_scores[idx] = min(f_rrt_max_value, b_rrt_max_value)
+		for (idx, proposed_state) in enumerate(proposed_states):
+			dist_to_f_rrt_states = -(1 + self.value_fn_uncertainty) * value_fn(f_rrt_states, np.array([proposed_state]))
+			dist_to_b_rrt_states = -(1 + self.value_fn_uncertainty) * value_fn(np.array([proposed_state]), b_rrt_states)
+
+			dist_to_start = dist_to_f_rrt_states + f_rrt_states_dist_to_start
+			dist_to_goal = dist_to_b_rrt_states + b_rrt_states_dist_to_goal
+
+			f_connection_idx = np.argmin(dist_to_start)
+			b_connection_idx = np.argmin(dist_to_goal)
+
+			proposed_f_connections.append(f_rrt_nodes[f_connection_idx])
+			proposed_b_connections.append(b_rrt_nodes[b_connection_idx])
+
+			proposed_state_scores[idx] = -(dist_to_start[f_connection_idx] + dist_to_goal[b_connection_idx]) + \
+				min(dist_to_f_rrt_states[f_connection_idx], dist_to_b_rrt_states[b_connection_idx])
 
 		proposed_state_probs = np.exp(
 			self.temperature * (proposed_state_scores - np.max(proposed_state_scores)))
 		proposed_state_probs /= np.sum(proposed_state_probs)
 
+		import matplotlib.pyplot as plt
+		from mpl_toolkits.mplot3d import Axes3D
+		fig = plt.figure()
+		ax = fig.add_subplot(111, projection='3d')
+		ax.scatter3D(proposed_states[:, 0], proposed_states[:, 1], proposed_state_probs)
+		plt.show()
+
 		target_state_idx = np.random.choice(self.n_target_samples, p=proposed_state_probs)
 		target_state = proposed_states[target_state_idx]
+		f_connection = proposed_f_connections[target_state_idx]
+		b_connection = proposed_b_connections[target_state_idx]
 
-		return target_state
+		return target_state, f_connection, b_connection
 
 if __name__ == "__main__":
 	from envs.pointmass import WallPointEnv
@@ -230,12 +245,12 @@ if __name__ == "__main__":
 
 	def f_policy(s, g):
 		a = g - s
-		a /= (np.linalg.norm(a, axis=-1) + 1e-8)
+		a /= np.maximum(np.ones(a.shape[0]), (np.linalg.norm(a, axis=-1) + 1e-8))
 		return a
 
 	def b_policy(s, g):
 		a = g - s
-		a /= (np.linalg.norm(a, axis=-1) + 1e-8)
+		a /= np.maximum(np.ones(a.shape[0]), (np.linalg.norm(a, axis=-1) + 1e-8))
 		return a
 
 	def f_dynamics(s, a):
