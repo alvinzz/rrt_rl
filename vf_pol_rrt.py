@@ -20,7 +20,6 @@ class Node():
 			self.tree = parent.tree
 			self.tree.nodes.append(self)
 			self.depth = self.parent.depth + 1
-			
 		self.children = []
 
 		self.f_connection = None
@@ -187,21 +186,44 @@ class VfPolRrt:
 
 		# get dist_to_goals
 		all_nodes = sorted(f_rrt_nodes + b_rrt_nodes, key=lambda node: node.dist_to_goal)
-		for (idx, node) in enumerate(b_rrt_nodes):
+		for (idx, node) in enumerate(all_nodes):
 			if node is self.goal_node:
 				continue
-			proposed_connections = b_rrt_nodes[:idx]
+			proposed_connections = all_nodes[:idx]
 			proposed_connection_states = np.array([node.state for node in proposed_connections])
 			proposed_connection_dists = -(1 + self.value_fn_uncertainty) * \
 				value_fn(np.array([node.state]), proposed_connection_states)
-			node_parent_idx = proposed_connections.index(node.parent)
-			proposed_connection_dists[node_parent_idx] = 1.
+			if node.tree in self.b_rrts:
+				try:
+					node_parent_idx = proposed_connections.index(node.parent)
+					proposed_connection_dists[node_parent_idx] = 1.
+				except ValueError:
+					pass					
+			else:
+				for child in node.children:
+					try:
+						node_child_idx = proposed_connections.index(child)
+						proposed_connection_dists[node_child_idx] = 1.
+					except ValueError:
+						pass
 			proposed_connection_dist_to_goals = np.array([node.dist_to_goal for node in proposed_connections])
+			dist_to_goals = proposed_connection_dists + proposed_connection_dist_to_goals
 
-			idx = np.argmin(proposed_connection_dists + proposed_connection_dist_to_goals)
-			if proposed_connection_dists[idx] < node.dist_to_goal:
-				node.dist_to_goal = proposed_connection_dists[idx]
-				# TODO: remove old connection to account for this...
+			min_dist_to_goal = np.min(dist_to_goals) # get min dist to goal
+			candidate_idxs = list(filter(lambda idx: dist_to_goals[idx] < min_dist_to_goal + 1., range(idx))) # get connection_nodes within 1 of min_dist_to_goal
+			min_connection_dist = max(1., np.min(proposed_connection_dists[candidate_idxs])) # of those connection_nodes, get the min connection_dist
+			candidate_idxs = filter(lambda idx: proposed_connection_dists[idx] <= min_connection_dist, candidate_idxs) # get connection_nodes with min_connection_dist
+			final_idx = min(candidate_idxs, key=lambda idx: dist_to_goals[idx]) # of those connection_nodes, select the minimum dist_to_goal
+
+			if node.tree in self.b_rrts:
+				if proposed_connections[final_idx] is not node.parent:
+					print("wiring {} from {} ({}) to {} ({})".format(node.state, node.b_connection.state, node.dist_to_goal, proposed_connections[final_idx].state, dist_to_goals[final_idx]))
+					node.
+					if node.parent is not None:
+						print("parent: {}".format(node.parent.state))
+			# else:
+			# 	if proposed_connections[final_idx] not in node.children:
+			# 		print("wiring {} from {} ({}) to {} ({})".format(node.state, node.b_connection.state, node.dist_to_goal, proposed_connections[final_idx].state, dist_to_goals[final_idx]))
 
 
 	def plot_rrt(self, dim1=0, dim2=1):
