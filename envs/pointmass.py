@@ -60,50 +60,58 @@ class WallPointEnv:
             self.point = args.astype(np.float32)
             return self.get_obs()
 
+    def random_state(self):
+        inside_wall = True
+        while inside_wall:
+            point = truncnorm.rvs(-2.5, 2.5, size=2)
+            inside_wall = point[0] >= -0.5 and point[0] <= 0.5 \
+                and point[1] >= -1.5 and point[1] <= 1.5
+        return point
+
     def step(self, action):
         next_point = self.point + np.clip(action, self.action_bounds[0], self.action_bounds[1])
         
-        # line_distances = 10*np.ones(4)
-        # line_intersections = 10*np.zeros([4, 2])
-        # if action[0] != 0:
-        #     action_mult = (-0.5-self.point[0])/action[0]
-        #     intersection_point = self.point + action*action_mult
-        #     if action_mult >= 0 and action_mult <= 1 \
-        #     and intersection_point[1] >= -1.5 and intersection_point[1] <= 1.5 \
-        #     and action[0] > 0:
-        #         line_distances[0] = np.linalg.norm(intersection_point - self.point)
-        #         line_intersections[0] = intersection_point
+        line_distances = 10*np.ones(4)
+        line_intersections = 10*np.zeros([4, 2])
+        if action[0] != 0:
+            action_mult = (-0.5-self.point[0])/action[0]
+            intersection_point = self.point + action*action_mult
+            if action_mult >= 0 and action_mult <= 1 \
+            and intersection_point[1] >= -1.5 and intersection_point[1] <= 1.5 \
+            and action[0] > 0:
+                line_distances[0] = np.linalg.norm(intersection_point - self.point)
+                line_intersections[0] = intersection_point
 
-        #     action_mult = (0.5-self.point[0])/action[0]
-        #     intersection_point = self.point + action*action_mult
-        #     if action_mult >= 0 and action_mult <= 1 \
-        #     and intersection_point[1] >= -1.5 and intersection_point[1] <= 1.5 \
-        #     and action[0] < 0:
-        #         line_distances[2] = np.linalg.norm(intersection_point - self.point)
-        #         line_intersections[2] = intersection_point
+            action_mult = (0.5-self.point[0])/action[0]
+            intersection_point = self.point + action*action_mult
+            if action_mult >= 0 and action_mult <= 1 \
+            and intersection_point[1] >= -1.5 and intersection_point[1] <= 1.5 \
+            and action[0] < 0:
+                line_distances[2] = np.linalg.norm(intersection_point - self.point)
+                line_intersections[2] = intersection_point
 
-        # if action[1] != 0:
-        #     action_mult = (1.5-self.point[1])/action[1]
-        #     intersection_point = self.point + action*action_mult
-        #     if action_mult >= 0 and action_mult <= 1 \
-        #     and intersection_point[0] >= -0.5 and intersection_point[0] <= 0.5 \
-        #     and action[1] < 0:
-        #         line_distances[1] = np.linalg.norm(intersection_point - self.point)
-        #         line_intersections[1] = intersection_point
+        if action[1] != 0:
+            action_mult = (1.5-self.point[1])/action[1]
+            intersection_point = self.point + action*action_mult
+            if action_mult >= 0 and action_mult <= 1 \
+            and intersection_point[0] >= -0.5 and intersection_point[0] <= 0.5 \
+            and action[1] < 0:
+                line_distances[1] = np.linalg.norm(intersection_point - self.point)
+                line_intersections[1] = intersection_point
 
-        #     action_mult = (-1.5-self.point[1])/action[1]
-        #     intersection_point = self.point + action*action_mult
-        #     if action_mult >= 0 and action_mult <= 1 \
-        #     and intersection_point[0] >= -0.5 and intersection_point[0] <= 0.5 \
-        #     and action[1] > 0:
-        #         line_distances[3] = np.linalg.norm(intersection_point - self.point)
-        #         line_intersections[3] = intersection_point
+            action_mult = (-1.5-self.point[1])/action[1]
+            intersection_point = self.point + action*action_mult
+            if action_mult >= 0 and action_mult <= 1 \
+            and intersection_point[0] >= -0.5 and intersection_point[0] <= 0.5 \
+            and action[1] > 0:
+                line_distances[3] = np.linalg.norm(intersection_point - self.point)
+                line_intersections[3] = intersection_point
         
-        # if np.min(line_distances) < 10:
-        #     self.point = line_intersections[np.argmin(line_distances)]
-        # else:
-        #     self.point = np.clip(next_point, -2.5, 2.5)
-        self.point = np.clip(next_point, -2.5, 2.5)
+        if np.min(line_distances) < 10:
+            self.point = line_intersections[np.argmin(line_distances)]
+        else:
+            self.point = np.clip(next_point, -2.5, 2.5)
+        # self.point = np.clip(next_point, -2.5, 2.5)
 
         return self.get_obs(), 0, False, {}
 
