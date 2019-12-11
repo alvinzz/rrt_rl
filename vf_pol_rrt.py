@@ -26,8 +26,8 @@ class Node():
 		self.f_connection = None
 		self.b_connection = None
 
-		self.dist_to_start = 0
-		self.dist_to_goal = 0
+		self.dist_to_start = None
+		self.dist_to_goal = None
 
 		self.state = state
 		self.action = action
@@ -53,16 +53,25 @@ class VfPolRrt:
 		self.b_dynamics = b_dynamics
 		self.value_fn = value_fn
 
-		# TODO: keep track of many forward/backward trees
-		start_node = Node(start_state, None, None)
-		self.f_rrts = [start_node.tree]
-		goal_node = Node(goal_state, None, None)
-		self.b_rrts = [goal_node.tree]
-
 		self.n_target_samples = n_target_samples
 		self.temperature = temperature
 
 		self.value_fn_uncertainty = value_fn_uncertainty
+
+		self.start_node = Node(start_state, None, None)
+		self.goal_node = Node(goal_state, None, None)
+		self.start_node.f_connection = None
+		self.start_node.dist_to_start = 0.
+		self.start_node.b_connection = self.goal_node
+		self.start_node.dist_to_goal = -(1 + self.value_fn_uncertainty) * \
+			value_fn(np.array([start_state]), np.array([goal_state]))[0]
+		self.goal_node.f_connection = self.start_node
+		self.goal_node.dist_to_start = self.start_node.dist_to_goal
+		self.goal_node.b_connection = None
+		self.goal_node.dist_to_goal = 0.
+
+		self.f_rrts = [self.start_node.tree]
+		self.b_rrts = [self.goal_node.tree]
 
 	def build_rrt(self, n_samples=1):
 		for sample_n in range(n_samples):
@@ -70,66 +79,130 @@ class VfPolRrt:
 			print("target_state:", target_state)
 			print("f_connection:", f_connection.state)
 			print("b_connection:", b_connection.state)
-			f_target = Node(target_state, None, None)
-			f_target.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([f_target.state]))[0]
-			f_target.dist_to_goal = -1 * value_fn(np.array([f_target.state]), np.array([self.b_rrts[0].root.state]))[0]
-			b_target = Node(target_state, None, None)
-			b_target.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([b_target.state]))[0]
-			b_target.dist_to_goal = -1 * value_fn(np.array([b_target.state]), np.array([self.b_rrts[0].root.state]))[0]
 
-			self.f_rrts.append(f_target.tree)
-			self.b_rrts.append(b_target.tree)
+			f_target = Node(target_state, None, None)
+			f_target.f_connection = f_connection
+			f_target.dist_to_start = f_connection.dist_to_start + \
+				-(1 + self.value_fn_uncertainty) * \
+					value_fn(np.array([f_connection.state]), np.array([target_state]))[0]
+			f_target.b_connection = b_connection
+			f_target.dist_to_goal = b_connection.dist_to_goal + \
+				-(1 + self.value_fn_uncertainty) * \
+					value_fn(np.array([target_state]), np.array([b_connection.state]))[0]
+
+			b_target = Node(target_state, None, None)
+			b_target.f_connection = f_connection
+			b_target.dist_to_start = f_target.dist_to_start
+			b_target.b_connection = b_connection
+			b_target.dist_to_goal = f_target.dist_to_goal
+
+			self.b_rrts.append(f_target.tree)
+			self.f_rrts.append(b_target.tree)
 
 			f_dist = -1 * self.value_fn(np.array([f_connection.state]), np.array([target_state]))[0]
 			b_dist = -1 * self.value_fn(np.array([target_state]), np.array([b_connection.state]))[0]
 
 			f_rrt_node = f_connection
-			target_node = b_target
-			print("f_dist:", f_dist)
+			target_node = f_target
+			# print("f_dist:", f_dist)
 			for t in range(int(np.ceil(f_dist/2))):
 				f_action = self.f_policy(np.array([f_rrt_node.state]), np.array([target_state]))[0]
 				f_rrt_next_state = self.f_dynamics(np.array([f_rrt_node.state]), np.array([f_action]))[0]
 				f_rrt_node = Node(f_rrt_next_state, f_action, f_rrt_node)
-				f_rrt_node.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([f_rrt_node.state]))[0]
-				f_rrt_node.dist_to_goal = -1 * value_fn(np.array([f_rrt_node.state]), np.array([self.b_rrts[0].root.state]))[0]
-				# print(f_rrt_node.dist_to_start, f_rrt_node.dist_to_goal)
+				f_rrt_node.f_connection = f_rrt_node.parent
+				f_rrt_node.dist_to_start = f_rrt_node.parent.dist_to_start + 1
+				f_rrt_node.b_connection = f_target
+				f_rrt_node.dist_to_goal = f_target.dist_to_goal + \
+					-(1 + self.value_fn_uncertainty) * \
+						value_fn(np.array([f_rrt_node.state]), np.array([target_state]))[0]
 
 				target_action = self.b_policy(np.array([f_connection.state]), np.array([target_node.state]))[0]
 				target_rrt_next_state = self.b_dynamics(np.array([target_node.state]), np.array([target_action]))[0]
 				target_node = Node(target_rrt_next_state, target_action, target_node)
-				target_node.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([target_node.state]))[0]
-				target_node.dist_to_goal = -1 * value_fn(np.array([target_node.state]), np.array([self.b_rrts[0].root.state]))[0]
-				# print(target_node.dist_to_start, target_node.dist_to_goal)
+				target_node.f_connection = f_connection
+				target_node.dist_to_start = f_connection.dist_to_start + \
+					-(1 + self.value_fn_uncertainty) * \
+						value_fn(np.array([f_connection.state]), np.array([target_node.state]))[0]
+				target_node.b_connection = target_node.parent
+				target_node.dist_to_goal = target_node.parent.dist_to_goal + 1
 
-				self.plot_rrt()
 			b_rrt_node = b_connection
-			target_node = f_target
-			print("b_dist:", b_dist)
+			target_node = b_target
+			# print("b_dist:", b_dist)
 			for t in range(int(np.ceil(b_dist/2))):
 				b_action = self.b_policy(np.array([target_state]), np.array([b_rrt_node.state]))[0]
 				b_rrt_next_state = self.b_dynamics(np.array([b_rrt_node.state]), np.array([b_action]))[0]
 				b_rrt_node = Node(b_rrt_next_state, b_action, b_rrt_node)
-				b_rrt_node.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([b_rrt_node.state]))[0]
-				b_rrt_node.dist_to_goal = -1 * value_fn(np.array([b_rrt_node.state]), np.array([self.b_rrts[0].root.state]))[0]
-				# print(b_rrt_node.dist_to_start, b_rrt_node.dist_to_goal)
+				b_rrt_node.f_connection = b_target
+				b_rrt_node.dist_to_start = b_target.dist_to_start + \
+					-(1 + self.value_fn_uncertainty) * \
+						value_fn(np.array([target_state]), np.array([b_rrt_node.state]))[0]
+				b_rrt_node.b_connection = b_rrt_node.parent
+				b_rrt_node.dist_to_goal = b_rrt_node.parent.dist_to_goal + 1
 
 				target_action = self.f_policy(np.array([target_node.state]), np.array([b_connection.state]))[0]
 				target_rrt_next_state = self.f_dynamics(np.array([target_node.state]), np.array([target_action]))[0]
 				target_node = Node(target_rrt_next_state, target_action, target_node)
-				target_node.dist_to_start = -1 * value_fn(np.array([self.f_rrts[0].root.state]), np.array([target_node.state]))[0]
-				target_node.dist_to_goal = -1 * value_fn(np.array([target_node.state]), np.array([self.b_rrts[0].root.state]))[0]
-				# print(target_node.dist_to_start, target_node.dist_to_goal)
+				target_node.f_connection = target_node.parent
+				target_node.dist_to_start = target_node.parent.dist_to_start + 1
+				target_node.b_connection = b_connection
+				target_node.dist_to_goal = b_connection.dist_to_goal + \
+					-(1 + self.value_fn_uncertainty) * \
+						value_fn(np.array([target_node.state]), np.array([b_connection.state]))[0]
 
-				self.plot_rrt()
-				
+				# self.plot_rrt()
+
 			# for f_rrt in self.f_rrts:
 			# 	print([node.state for node in f_rrt.nodes])
 			# for b_rrt in self.b_rrts:
 			# 	print([node.state for node in b_rrt.nodes])
-			# self.plot_rrt()
+			self.get_node_distances()
+			self.plot_rrt()
 
 		cv2.waitKey(1)
 		cv2.destroyWindow("rrt_plot")
+
+	def get_node_distances(self):
+		f_rrt_nodes, b_rrt_nodes = self.get_all_nodes()
+		f_states = [node.state for node in f_rrt_nodes]
+		b_states = [node.state for node in b_rrt_nodes]
+
+		# # assign initial estimates of dist_to_goal/dist_to_start for nodes which dont have them yet
+		# unestimated_dist_to_goal_nodes = list(filter(lambda node: node.dist_to_goal is None, f_rrt_nodes)) + \
+		# 	list(filter(lambda node: node.dist_to_goal is None, b_rrt_nodes))
+		# unestimated_dist_to_start_nodes = list(filter(lambda node: node.dist_to_start is None, f_rrt_nodes)) + \
+		# 	list(filter(lambda node: node.dist_to_start is None, b_rrt_nodes))
+		# unestimated_dist_to_goal_states = [node.state for node in unestimated_dist_to_goal_nodes]
+		# unestimated_dist_to_start_states = [node.state for node in unestimated_dist_to_start_nodes]
+		# unestimated_dist_to_goals = -(1 + self.value_fn_uncertainty) * \
+		# 	value_fn(unestimated_dist_to_goal_states, np.array([self.b_rrts[0].root.state]))
+		# unestimated_dist_to_starts = -(1 + self.value_fn_uncertainty) * \
+		# 	value_fn(np.array([self.f_rrts[0].root.state]), unestimated_dist_to_start_states)
+		# for (node, dist_to_goal) in zip(unestimated_dist_to_goal_nodes, unestimated_dist_to_goals):
+		# 	node.b_connection = self.b_rrts[0].root
+		# 	node.dist_to_goal = dist_to_goal
+		# for (node, dist_to_start) in zip(unestimated_dist_to_start_nodes, unestimated_dist_to_starts):
+		# 	node.f_connection = self.f_rrts[0].root
+		# 	node.dist_to_start = dist_to_start
+
+		# get dist_to_goals
+		all_nodes = sorted(f_rrt_nodes + b_rrt_nodes, key=lambda node: node.dist_to_goal)
+		for (idx, node) in enumerate(b_rrt_nodes):
+			if node is self.goal_node:
+				continue
+			proposed_connections = b_rrt_nodes[:idx]
+			proposed_connection_states = np.array([node.state for node in proposed_connections])
+			proposed_connection_dists = -(1 + self.value_fn_uncertainty) * \
+				value_fn(np.array([node.state]), proposed_connection_states)
+			node_parent_idx = proposed_connections.index(node.parent)
+			proposed_connection_dists[node_parent_idx] = 1.
+			proposed_connection_dist_to_goals = np.array([node.dist_to_goal for node in proposed_connections])
+
+			idx = np.argmin(proposed_connection_dists + proposed_connection_dist_to_goals)
+			if proposed_connection_dists[idx] < node.dist_to_goal:
+				node.dist_to_goal = proposed_connection_dists[idx]
+				# TODO: remove old connection to account for this...
+
 
 	def plot_rrt(self, dim1=0, dim2=1):
 		imsize = 500
@@ -203,8 +276,10 @@ class VfPolRrt:
 		proposed_b_connections = []
 
 		for (idx, proposed_state) in enumerate(proposed_states):
-			dist_to_f_rrt_states = -(1 + self.value_fn_uncertainty) * value_fn(f_rrt_states, np.array([proposed_state]))
-			dist_to_b_rrt_states = -(1 + self.value_fn_uncertainty) * value_fn(np.array([proposed_state]), b_rrt_states)
+			dist_to_f_rrt_states = -(1 + self.value_fn_uncertainty) * \
+				value_fn(f_rrt_states, np.array([proposed_state]))
+			dist_to_b_rrt_states = -(1 + self.value_fn_uncertainty) * \
+				value_fn(np.array([proposed_state]), b_rrt_states)
 
 			dist_to_start = dist_to_f_rrt_states + f_rrt_states_dist_to_start
 			dist_to_goal = dist_to_b_rrt_states + b_rrt_states_dist_to_goal
