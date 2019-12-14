@@ -501,16 +501,45 @@ class VfPolRrt:
 		f_goals = []
 		f_actions = []
 		f_action_weights = []
-		for rrt in self.f_rrts:
-			root = rrt.root
-			for child in root.child:
-				descendants_list = child.get_descendants_list()
-				f_states.extend([root.state for _ in range(len(descendants_list))])
-				f_goals.extend([descendant.state for descendant in descendants_list])
-				f_actions.extend([child.action for _ in range(len(descendants_list))])
-				f_action_weights.extend([1. for _ in range(len(descendants_list))])
 
-			# TODO: add f_goal
+		b_states = []
+		b_goals = []
+		b_actions = []
+		b_action_weights = []
+
+		def add_node(node, forward):
+			for child in node.children:
+				descendants_list = child.get_descendants_list()
+				if forward:
+					f_states.extend([node.state for _ in range(len(descendants_list))])
+					f_goals.extend([descendant.state for descendant in descendants_list])
+					f_actions.extend([child.action for _ in range(len(descendants_list))])
+					f_action_weights.extend([1. for _ in range(len(descendants_list))])
+
+					b_states.extend([node.state for _ in range(len(descendants_list))])
+					b_goals.extend([descendant.state for descendant in descendants_list])
+					b_actions.extend([descendant.action for _ in range(len(descendants_list))])
+					b_action_weights.extend([1. for _ in range(len(descendants_list))])
+				else:
+					b_states.extend([descendant.state for _ in range(len(descendants_list))])
+					b_goals.extend([node.state for descendant in descendants_list])
+					b_actions.extend([node.action for _ in range(len(descendants_list))])
+					b_action_weights.extend([1. for _ in range(len(descendants_list))])
+
+					f_states.extend([descendant.state for _ in range(len(descendants_list))])
+					f_goals.extend([node.state for descendant in descendants_list])
+					f_actions.extend([descendant.action for _ in range(len(descendants_list))])
+					f_action_weights.extend([1. for _ in range(len(descendants_list))])
+
+		for rrt in self.f_rrts:
+			add_node(rrt.root, forward=True)
+		for rrt in self.b_rrts:
+			add_node(rrt.root, forward=False)
+
+		for (s, f, a) in zip(f_states, f_goals, f_actions):
+			print(s, f, a)
+
+		# TODO: add f_goal
 
 if __name__ == "__main__":
 	from envs.pointmass import WallPointEnv
@@ -569,6 +598,7 @@ if __name__ == "__main__":
 			states, goals, values = rrt.get_value_training_data()
 			# print(states, goals, values)
 			value_fn.optimize(states, goals, values)
+		rrt.get_policy_training_data()
 		rrt.clear()
 
 	#rrt.execute_plan(100)
