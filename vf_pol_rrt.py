@@ -31,6 +31,12 @@ class Node():
 		self.state = state
 		self.action = action
 
+	def get_descendants_list(self):
+		l = [self] + self.children
+		for child in self.children:
+			l.extend(child.get_descendants_list())
+		return l
+
 class VfPolRrt:
 	def __init__(self,
 		env,
@@ -72,6 +78,14 @@ class VfPolRrt:
 		self.f_rrts = [self.start_node.tree]
 		self.b_rrts = [self.goal_node.tree]
 
+	def clear(self):
+		self.f_rrts = self.f_rrts[:1]
+		self.b_rrts = self.b_rrts[:1]
+		self.f_rrts[0].nodes = self.f_rrts[0].nodes[:1]
+		self.b_rrts[0].nodes = self.b_rrts[0].nodes[:1]
+		self.f_rrts[0].root.children = []
+		self.b_rrts[0].root.children = []
+
 	def build_rrt(self, n_samples=1):
 		for sample_n in range(n_samples):
 			target_state, f_connection, b_connection = self.get_target_state()
@@ -100,10 +114,12 @@ class VfPolRrt:
 
 			f_dist = -1 * self.value_fn(np.array([f_connection.state]), np.array([target_state]))[0]
 			b_dist = -1 * self.value_fn(np.array([target_state]), np.array([b_connection.state]))[0]
+			print("f_dist", f_dist)
+			print("b_dist", b_dist)
 
 			f_rrt_node = f_connection
 			target_node = f_target
-			for t in range(int(np.ceil(f_dist/2))):
+			for t in range(max(1, int(np.ceil(f_dist/2)))):
 				f_action = self.f_policy(np.array([f_rrt_node.state]), np.array([target_state]))[0]
 				f_rrt_next_state = self.f_dynamics(np.array([f_rrt_node.state]), np.array([f_action]))[0]
 				f_rrt_node = Node(f_rrt_next_state, f_action, f_rrt_node)
@@ -126,7 +142,7 @@ class VfPolRrt:
 
 			b_rrt_node = b_connection
 			target_node = b_target
-			for t in range(int(np.ceil(b_dist/2))):
+			for t in range(max(1, int(np.ceil(b_dist/2)))):
 				b_action = self.b_policy(np.array([target_state]), np.array([b_rrt_node.state]))[0]
 				b_rrt_next_state = self.b_dynamics(np.array([b_rrt_node.state]), np.array([b_action]))[0]
 				b_rrt_node = Node(b_rrt_next_state, b_action, b_rrt_node)
@@ -159,7 +175,10 @@ class VfPolRrt:
 		b_states = [node.state for node in b_rrt_nodes]
 
 		# get dist_to_goals
-		all_nodes = sorted(f_rrt_nodes + b_rrt_nodes, key=lambda node: node.dist_to_goal)
+		all_nodes = list(sorted(f_rrt_nodes + b_rrt_nodes, key=lambda node: node.dist_to_goal))
+		goal_node_idx = all_nodes.index(self.goal_node)
+		all_nodes.pop(goal_node_idx)
+		all_nodes.insert(0, self.goal_node)
 		for (idx, node) in enumerate(all_nodes):
 			if node is self.goal_node:
 				continue
@@ -167,12 +186,13 @@ class VfPolRrt:
 			proposed_connection_states = np.array([node.state for node in proposed_connections])
 			proposed_connection_dists = -(1 + self.value_fn_uncertainty) * \
 				value_fn(np.array([node.state]), proposed_connection_states)
+			proposed_connection_dists = np.maximum(1 + self.value_fn_uncertainty, proposed_connection_dists)
 			if node.tree in self.b_rrts:
 				try:
 					node_parent_idx = proposed_connections.index(node.parent)
 					proposed_connection_dists[node_parent_idx] = 1.
 				except ValueError:
-					pass					
+					pass
 			else:
 				for child in node.children:
 					try:
@@ -184,8 +204,8 @@ class VfPolRrt:
 			dist_to_goals = proposed_connection_dists + proposed_connection_dist_to_goals
 
 			min_dist_to_goal = np.min(dist_to_goals) # get min dist to goal
-			candidate_idxs = list(filter(lambda idx: dist_to_goals[idx] < min_dist_to_goal + 1., range(idx))) # get connection_nodes within 1 of min_dist_to_goal
-			min_connection_dist = max(1., np.min(proposed_connection_dists[candidate_idxs])) # of those connection_nodes, get the min connection_dist
+			candidate_idxs = list(filter(lambda idx: dist_to_goals[idx] <= np.ceil(min_dist_to_goal), range(idx))) # get connection_nodes within 1 of min_dist_to_goal
+			min_connection_dist = np.min(proposed_connection_dists[candidate_idxs]) # of those connection_nodes, get the min connection_dist
 			candidate_idxs = filter(lambda idx: proposed_connection_dists[idx] <= min_connection_dist, candidate_idxs) # get connection_nodes with min_connection_dist
 			final_idx = min(candidate_idxs, key=lambda idx: dist_to_goals[idx]) # of those connection_nodes, select the minimum dist_to_goal
 
@@ -194,6 +214,9 @@ class VfPolRrt:
 
 		# get dist_to_starts
 		all_nodes = sorted(f_rrt_nodes + b_rrt_nodes, key=lambda node: node.dist_to_start)
+		start_node_idx = all_nodes.index(self.start_node)
+		all_nodes.pop(start_node_idx)
+		all_nodes.insert(0, self.start_node)
 		for (idx, node) in enumerate(all_nodes):
 			if node is self.start_node:
 				continue
@@ -201,12 +224,13 @@ class VfPolRrt:
 			proposed_connection_states = np.array([node.state for node in proposed_connections])
 			proposed_connection_dists = -(1 + self.value_fn_uncertainty) * \
 				value_fn(proposed_connection_states, np.array([node.state]))
+			proposed_connection_dists = np.maximum(1 + self.value_fn_uncertainty, proposed_connection_dists)
 			if node.tree in self.f_rrts:
 				try:
 					node_parent_idx = proposed_connections.index(node.parent)
 					proposed_connection_dists[node_parent_idx] = 1.
 				except ValueError:
-					pass					
+					pass
 			else:
 				for child in node.children:
 					try:
@@ -218,8 +242,8 @@ class VfPolRrt:
 			dist_to_starts = proposed_connection_dists + proposed_connection_dist_to_starts
 
 			min_dist_to_start = np.min(dist_to_starts) # get min dist to start
-			candidate_idxs = list(filter(lambda idx: dist_to_starts[idx] < min_dist_to_start + 1., range(idx))) # get connection_nodes within 1 of min_dist_to_start
-			min_connection_dist = max(1., np.min(proposed_connection_dists[candidate_idxs])) # of those connection_nodes, get the min connection_dist
+			candidate_idxs = list(filter(lambda idx: dist_to_starts[idx] <= np.ceil(min_dist_to_start), range(idx))) # get connection_nodes within 1 of min_dist_to_start
+			min_connection_dist = np.min(proposed_connection_dists[candidate_idxs]) # of those connection_nodes, get the min connection_dist
 			candidate_idxs = filter(lambda idx: proposed_connection_dists[idx] <= min_connection_dist, candidate_idxs) # get connection_nodes with min_connection_dist
 			final_idx = min(candidate_idxs, key=lambda idx: dist_to_starts[idx]) # of those connection_nodes, select the minimum dist_to_start
 
@@ -229,6 +253,20 @@ class VfPolRrt:
 	def plot_rrt(self, dim1=0, dim2=1):
 		imsize = 500
 		im = np.zeros((imsize, imsize, 3))
+		x1 = int(im.shape[0] \
+			* (self.start_node.state[dim1] - self.env.ob_bounds[0][dim1]) \
+			/ (self.env.ob_bounds[1][dim1] - self.env.ob_bounds[0][dim1]))
+		y1 = int(im.shape[1] \
+			* (self.env.ob_bounds[1][dim2] - self.start_node.state[dim2]) \
+			/ (self.env.ob_bounds[1][dim2] - self.env.ob_bounds[0][dim2]))
+		im = cv2.circle(im, (x1, y1), imsize//50, [1, 0, 0], -1)
+		x1 = int(im.shape[0] \
+			* (self.goal_node.state[dim1] - self.env.ob_bounds[0][dim1]) \
+			/ (self.env.ob_bounds[1][dim1] - self.env.ob_bounds[0][dim1]))
+		y1 = int(im.shape[1] \
+			* (self.env.ob_bounds[1][dim2] - self.goal_node.state[dim2]) \
+			/ (self.env.ob_bounds[1][dim2] - self.env.ob_bounds[0][dim2]))
+		im = cv2.circle(im, (x1, y1), imsize//50, [0, 0, 1], -1)
 		for rrt in self.f_rrts:
 			x1 = int(im.shape[0] \
 				* (rrt.root.state[dim1] - self.env.ob_bounds[0][dim1]) \
@@ -258,6 +296,7 @@ class VfPolRrt:
 		y1 = int(im.shape[1] \
 			* (self.env.ob_bounds[1][dim2] - node.state[dim2]) \
 			/ (self.env.ob_bounds[1][dim2] - self.env.ob_bounds[0][dim2]))
+		im = cv2.circle(im, (x1, y1), im.shape[0]//200, [0, 1, 0], -1)
 
 		if node.f_connection not in node.children and node.f_connection is not node.parent:
 			x2 = int(im.shape[0] \
@@ -350,12 +389,12 @@ class VfPolRrt:
 			self.temperature * (proposed_state_scores - np.max(proposed_state_scores)))
 		proposed_state_probs /= np.sum(proposed_state_probs)
 
-		# import matplotlib.pyplot as plt
-		# from mpl_toolkits.mplot3d import Axes3D
-		# fig = plt.figure()
-		# ax = fig.add_subplot(111, projection='3d')
-		# ax.scatter3D(proposed_states[:, 0], proposed_states[:, 1], proposed_state_probs)
-		# plt.show()
+		import matplotlib.pyplot as plt
+		from mpl_toolkits.mplot3d import Axes3D
+		fig = plt.figure()
+		ax = fig.add_subplot(111, projection='3d')
+		ax.scatter3D(proposed_states[:, 0], proposed_states[:, 1], proposed_state_probs)
+		plt.show()
 
 		target_state_idx = np.random.choice(self.n_target_samples, p=proposed_state_probs)
 		target_state = proposed_states[target_state_idx]
@@ -368,16 +407,18 @@ class VfPolRrt:
 		self.env.reset(self.start_node.state)
 		current_node = self.start_node
 		t = 0
+		self.env.render()
 		while -1 * value_fn(np.array([current_node.state]), np.array([self.goal_node.state]))[0] >= 1 and \
 			t < 100:
 
 			action = self.f_policy(np.array([current_node.state]), np.array([current_node.b_connection.state]))[0]
 			# print(action)
 			next_state = env.step(action)[0]
-			print(next_state)
+			# print(next_state)
+			self.env.render()
 
 			current_node = Node(next_state, action, current_node)
-			
+
 			f_rrt_nodes, b_rrt_nodes = self.get_all_nodes()
 			all_nodes = f_rrt_nodes + b_rrt_nodes
 			all_nodes.remove(current_node)
@@ -399,6 +440,73 @@ class VfPolRrt:
 			current_node.dist_to_goal = dist_to_goal
 
 			t += 1
+
+		self.env.close()
+
+	def get_value_training_data(self):
+		states = []
+		goals = []
+		values = []
+		# look at trees
+		def add_node(node, forward):
+			descendants_list = node.get_descendants_list()
+			if forward:
+				states.extend([node.state for _ in range(len(descendants_list))])
+				goals.extend([descendant.state for descendant in descendants_list])
+			else:
+				goals.extend([node.state for _ in range(len(descendants_list))])
+				states.extend([descendant.state for descendant in descendants_list])
+			values.extend([node.depth - descendant.depth for descendant in descendants_list])
+
+			for child in node.children:
+				add_node(child, forward)
+
+		for rrt in self.f_rrts:
+			add_node(rrt.root, forward=True)
+		for rrt in self.b_rrts:
+			add_node(rrt.root, forward=False)
+
+		# look at paths to goal
+		f_nodes, b_nodes = self.get_all_nodes()
+		all_nodes = f_nodes + b_nodes
+		def get_path_to_goal(node):
+			path = [node]
+			dists = [0.]
+			current_node = node
+			while current_node is not self.goal_node:
+				next_node = current_node.b_connection
+				path.append(next_node)
+				if next_node in current_node.children or next_node is current_node.parent:
+					dists.append(dists[-1] + 1.)
+				else:
+					dists.append(dists[-1] + (current_node.dist_to_goal - next_node.dist_to_goal) / (1 + self.value_fn_uncertainty))
+				current_node = next_node
+			return path, dists
+		for node in all_nodes:
+			path, dists = get_path_to_goal(node)
+			# print([node.state for node in path])
+			# print(dists)
+			states.append(node.state)
+			idx = np.random.randint(len(path))
+			goals.append(path[idx].state)
+			values.append(-dists[idx])
+		return np.array(states), np.array(goals), np.array(values)
+
+	def get_policy_training_data(self):
+		f_states = []
+		f_goals = []
+		f_actions = []
+		f_action_weights = []
+		for rrt in self.f_rrts:
+			root = rrt.root
+			for child in root.child:
+				descendants_list = child.get_descendants_list()
+				f_states.extend([root.state for _ in range(len(descendants_list))])
+				f_goals.extend([descendant.state for descendant in descendants_list])
+				f_actions.extend([child.action for _ in range(len(descendants_list))])
+				f_action_weights.extend([1. for _ in range(len(descendants_list))])
+
+			# TODO: add f_goal
 
 if __name__ == "__main__":
 	from envs.pointmass import WallPointEnv
@@ -431,8 +539,10 @@ if __name__ == "__main__":
 			res.append(env.step(-a[i])[0])
 		return np.array(res)
 
-	def value_fn(s, s_prime):
-		return -np.linalg.norm(s - s_prime, axis=-1)
+	#def value_fn(s, s_prime):
+	#	return -np.linalg.norm(s - s_prime, axis=-1)
+	from nn import ValueFn
+	value_fn = ValueFn([4, 100, 100, 1])
 
 	rrt = VfPolRrt(
 		env,
@@ -447,24 +557,12 @@ if __name__ == "__main__":
 		value_fn_uncertainty=0.05,
 	)
 
-	rrt.build_rrt(50)
+	for itr in range(100):
+		rrt.build_rrt(10)
+		states, goals, values = rrt.get_value_training_data()
+		# print(states, goals, values)
+		value_fn.optimize(states, goals, values)
+		rrt.clear()
 
-	rrt.execute_plan(100)
-
-	# execution phase
-	# env.reset(start_state)
-	# current_node = rrt.start_node
-	# while np.linalg.norm(current_node.state - rrt.goal_node.state) > 0.1:
-	# 	print(current_node.state)
-	# 	next_connection = current_node.b_connection
-	# 	action = f_policy(np.array([current_node.state]), np.array([next_connection.state]))[0]
-	# 	next_state = env.step(action)[0]
-
-	# 	current_node = Node(next_state, action, current_node)
-	# 	current_node.f_connection = current_node.parent
-	# 	current_node.dist_to_start = current_node.parent.dist_to_start + 1
-	# 	for 
-	# 	current_node.b_connection = ???
-
-
-	# 	rrt.get_node_distances()
+	#rrt.execute_plan(100)
+    # needed to train dynamics, however, use GT dynamics for now...
