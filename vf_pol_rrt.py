@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+import tqdm
 
 class Tree():
 	def __init__(self, start_node):
@@ -86,9 +87,9 @@ class VfPolRrt:
 		self.f_rrts[0].root.children = []
 		self.b_rrts[0].root.children = []
 
-	def build_rrt(self, n_samples=1):
+	def build_rrt(self, n_samples=1, display=False):
 		for sample_n in range(n_samples):
-			target_state, f_connection, b_connection = self.get_target_state()
+			target_state, f_connection, b_connection = self.get_target_state(display and (sample_n==0))
 			print("target_state:", target_state)
 			print("f_connection:", f_connection.state)
 			print("b_connection:", b_connection.state)
@@ -164,10 +165,12 @@ class VfPolRrt:
 						value_fn(np.array([target_node.state]), np.array([b_connection.state]))[0]
 
 			self.get_node_distances()
-			self.plot_rrt()
+			if display and (sample_n == n_samples - 1):
+				self.plot_rrt()
 
-		cv2.waitKey(1)
-		cv2.destroyWindow("rrt_plot")
+		if display:
+			cv2.waitKey(0)
+			cv2.destroyWindow("rrt_plot")
 
 	def get_node_distances(self):
 		f_rrt_nodes, b_rrt_nodes = self.get_all_nodes()
@@ -350,7 +353,7 @@ class VfPolRrt:
 
 		return f_rrt_leaves, b_rrt_leaves
 
-	def get_target_state(self):
+	def get_target_state(self, display):
 		# proposed_states = np.random.uniform(
 		# 	self.env.ob_bounds[0], self.env.ob_bounds[1],
 		# 	size=(self.n_target_samples, self.env.ob_bounds[0].shape[0]))
@@ -389,12 +392,13 @@ class VfPolRrt:
 			self.temperature * (proposed_state_scores - np.max(proposed_state_scores)))
 		proposed_state_probs /= np.sum(proposed_state_probs)
 
-		import matplotlib.pyplot as plt
-		from mpl_toolkits.mplot3d import Axes3D
-		fig = plt.figure()
-		ax = fig.add_subplot(111, projection='3d')
-		ax.scatter3D(proposed_states[:, 0], proposed_states[:, 1], proposed_state_probs)
-		plt.show()
+		if display:
+			import matplotlib.pyplot as plt
+			from mpl_toolkits.mplot3d import Axes3D
+			fig = plt.figure()
+			ax = fig.add_subplot(111, projection='3d')
+			ax.scatter3D(proposed_states[:, 0], proposed_states[:, 1], proposed_state_probs)
+			plt.show()
 
 		target_state_idx = np.random.choice(self.n_target_samples, p=proposed_state_probs)
 		target_state = proposed_states[target_state_idx]
@@ -557,11 +561,14 @@ if __name__ == "__main__":
 		value_fn_uncertainty=0.05,
 	)
 
-	for itr in range(100):
-		rrt.build_rrt(10)
-		states, goals, values = rrt.get_value_training_data()
-		# print(states, goals, values)
-		value_fn.optimize(states, goals, values)
+	for itr in tqdm.tqdm(range(101)):
+		display = (itr % 10 == 0)
+		rrt.build_rrt(10, display)
+		for inner in range(10):
+			rrt.get_node_distances()
+			states, goals, values = rrt.get_value_training_data()
+			# print(states, goals, values)
+			value_fn.optimize(states, goals, values)
 		rrt.clear()
 
 	#rrt.execute_plan(100)

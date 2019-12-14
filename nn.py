@@ -131,12 +131,12 @@ class ValueFn(nn.Module):
         if goal.shape[0] == 1:
             goal = goal.repeat([state.shape[0], 1])
 
-        for epoch in range(10):
-            self.optimizer.zero_grad()
-            value_pred = self.forward(state, goal)
-            loss = torch.mean((value_pred - target_value)**2)
-            loss.backward()
-            self.optimizer.step()
+        # for epoch in range(10):
+        self.optimizer.zero_grad()
+        value_pred = self.forward(state, goal)
+        loss = torch.mean((value_pred - target_value)**2)
+        loss.backward()
+        self.optimizer.step()
 
 if  __name__ == "__main__":
     p = Policy([4, 100, 4])
