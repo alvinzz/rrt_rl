@@ -47,9 +47,11 @@ class VfPolRrt:
 		value_fn,
 
 		n_target_samples=1000,
-		temperature=0.1,
+		target_temperature=1.0,
 
 		value_fn_uncertainty=0.05,
+
+		policy_temperature=2.0,
 	):
 		self.env = env
 
@@ -60,9 +62,11 @@ class VfPolRrt:
 		self.value_fn = value_fn
 
 		self.n_target_samples = n_target_samples
-		self.temperature = temperature
+		self.target_temperature = target_temperature
 
 		self.value_fn_uncertainty = value_fn_uncertainty
+
+		self.policy_temperature = policy_temperature
 
 		self.start_node = Node(start_state, None, None)
 		self.goal_node = Node(goal_state, None, None)
@@ -389,7 +393,7 @@ class VfPolRrt:
 				min(dist_to_f_rrt_states[f_connection_idx], dist_to_b_rrt_states[b_connection_idx])
 
 		proposed_state_probs = np.exp(
-			self.temperature * (proposed_state_scores - np.max(proposed_state_scores)))
+			self.target_temperature * (proposed_state_scores - np.max(proposed_state_scores)))
 		proposed_state_probs /= np.sum(proposed_state_probs)
 
 		if display:
@@ -473,6 +477,7 @@ class VfPolRrt:
 		# look at paths to goal
 		f_nodes, b_nodes = self.get_all_nodes()
 		all_nodes = f_nodes + b_nodes
+
 		def get_path_to_goal(node):
 			path = [node]
 			dists = [0.]
@@ -480,20 +485,44 @@ class VfPolRrt:
 			while current_node is not self.goal_node:
 				next_node = current_node.b_connection
 				path.append(next_node)
-				if next_node in current_node.children or next_node is current_node.parent:
+				if (next_node.tree in self.f_rrts and next_node in current_node.children) or \
+					(next_node.tree in self.b_rrts and next_node is current_node.parent):
 					dists.append(dists[-1] + 1.)
 				else:
 					dists.append(dists[-1] + (current_node.dist_to_goal - next_node.dist_to_goal) / (1 + self.value_fn_uncertainty))
 				current_node = next_node
 			return path, dists
+
+		def get_path_to_start(node):
+			path = [node]
+			dists = [0.]
+			current_node = node
+			while current_node is not self.start_node:
+				next_node = current_node.f_connection
+				path.append(next_node)
+				if (next_node.tree in self.b_rrts and next_node in current_node.children) or \
+					(next_node.tree in self.f_rrts and next_node is current_node.parent):
+					dists.append(dists[-1] + 1.)
+				else:
+					dists.append(dists[-1] + (current_node.dist_to_start - next_node.dist_to_start) / (1 + self.value_fn_uncertainty))
+				current_node = next_node
+			return path, dists
+
 		for node in all_nodes:
-			path, dists = get_path_to_goal(node)
-			# print([node.state for node in path])
-			# print(dists)
+			f_path, f_dists = get_path_to_goal(node)
+			# print([node.state for node in f_path])
+			# print(f_dists)
 			states.append(node.state)
 			idx = np.random.randint(len(path))
 			goals.append(path[idx].state)
 			values.append(-dists[idx])
+
+			b_path, b_dists = get_path_to_start(node)
+			idx = np.random.randint(len(path))
+			states.append(path[idx].state)
+			goals.append(node.state)
+			values.append(-dists[idx])
+
 		return np.array(states), np.array(goals), np.array(values)
 
 	def get_policy_training_data(self):
@@ -510,26 +539,38 @@ class VfPolRrt:
 		def add_node(node, forward):
 			for child in node.children:
 				descendants_list = child.get_descendants_list()
+				descendant_states = np.array([descendant.state for descendant in descendants_list])
+
+				if forward:
+					baseline_dists = self.value_fn(np.array([node.state]), descendant_states)
+				else:
+					baseline_dists = self.value_fn(descendant_states, np.array([node.state]))
+				descendant_depths = [descendant.depth for descendant in descendants_list]
+				descendant_dists = np.array(descendant_depths) - node.depth
+				action_weights = np.exp(self.policy_temperature * (baseline_dists - descendant_dists))
+
 				if forward:
 					f_states.extend([node.state for _ in range(len(descendants_list))])
 					f_goals.extend([descendant.state for descendant in descendants_list])
 					f_actions.extend([child.action for _ in range(len(descendants_list))])
-					f_action_weights.extend([1. for _ in range(len(descendants_list))])
+					f_action_weights.extend(action_weights.tolist())
 
 					b_states.extend([node.state for _ in range(len(descendants_list))])
 					b_goals.extend([descendant.state for descendant in descendants_list])
-					b_actions.extend([descendant.action for _ in range(len(descendants_list))])
-					b_action_weights.extend([1. for _ in range(len(descendants_list))])
+					b_actions.extend([descendant.action for descendant in descendants_list])
+					b_action_weights.extend(action_weights.tolist())
 				else:
-					b_states.extend([descendant.state for _ in range(len(descendants_list))])
-					b_goals.extend([node.state for descendant in descendants_list])
+					b_states.extend([descendant.state for descendant in descendants_list])
+					b_goals.extend([node.state for _ in range(len(descendants_list))])
 					b_actions.extend([node.action for _ in range(len(descendants_list))])
-					b_action_weights.extend([1. for _ in range(len(descendants_list))])
+					b_action_weights.extend(action_weights.tolist())
 
-					f_states.extend([descendant.state for _ in range(len(descendants_list))])
-					f_goals.extend([node.state for descendant in descendants_list])
-					f_actions.extend([descendant.action for _ in range(len(descendants_list))])
-					f_action_weights.extend([1. for _ in range(len(descendants_list))])
+					f_states.extend([descendant.state for descendant in descendants_list])
+					f_goals.extend([node.state for _ in range(len(descendants_list))])
+					f_actions.extend([descendant.action for descendant in descendants_list])
+					f_action_weights.extend(action_weights.tolist())
+
+				add_node(child, forward)
 
 		for rrt in self.f_rrts:
 			add_node(rrt.root, forward=True)
@@ -539,7 +580,86 @@ class VfPolRrt:
 		for (s, f, a) in zip(f_states, f_goals, f_actions):
 			print(s, f, a)
 
-		# TODO: add f_goal
+		f_nodes, b_nodes = self.get_all_nodes()
+		all_nodes = f_nodes + b_nodes
+
+		def get_path_to_goal(node):
+			path = []
+			current_node = node
+			while current_node is not self.goal_node:
+				next_node = current_node.b_connection
+				path.append(next_node)
+			return path
+
+		def get_path_to_start(node):
+			path = []
+			current_node = node
+			while current_node is not self.start_node:
+				next_node = current_node.f_connection
+				path.append(next_node)
+			return path
+
+		for node in all_nodes:
+			path_to_goal = get_path_to_goal(node)
+			path_to_start = get_path_to_start(node)
+
+			if path_to_goal:
+				local_goal = np.random.choice(path_to_goal)
+
+				direct_action = self.f_policy(np.array([node.state]), np.array([local_goal.state]))[0]
+				direct_next_state = self.f_dynamics(np.array([node.state]), np.array([direct_action]))[0]
+
+				if node.tree in self.f_rrts:
+					actions = [child.action for child in node.children] + [direct_action]
+					next_states = [child.state for child in node.children] + [direct_next_state]
+				else:
+					if node.parent:
+						actions = [node.parent.action, direct_action]
+						next_states = [node.parent.state, direct_next_state]
+					else:
+						actions = [direct_action]
+						next_states = [direct_next_state]
+
+				next_dist_to_local_goals = -self.value_fn(np.array(next_states), np.array([local_goal]))
+				baseline_dist_to_local_goal = -self.value_fn(np.array([node.state]), np.array([local_goal]))[0]
+				#action_weights = np.exp(self.policy_temperature * (np.min(next_dist_to_local_goals) - next_dist_to_local_goals))
+				#action_weights /= np.sum(action_weights)
+				action_weights = np.exp(self.policy_temperature * (baseline_dist_to_local_goal - (1 + next_dist_to_local_goals)))
+
+				f_states.extend([node.state for _ in range(len(actions))])
+				f_actions.extend(actions)
+				f_goals.extend([local_goal.state for _ in range(len(actions))])
+				f_action_weights.extend(action_weights.tolist())
+
+			if path_to_start:
+				local_start = np.random.choice(path_to_start)
+
+				direct_action = self.b_policy(np.array([local_start.state]), np.array([node.state]))[0]
+				direct_next_state = self.b_dynamics(np.array([node.state]), np.array([direct_action]))[0]
+
+				if node.tree in self.b_rrts:
+					actions = [child.action for child in node.children] + [direct_action]
+					next_states = [child.state for child in node.children] + [direct_next_state]
+				else:
+					if node.parent:
+						actions = [node.parent.action, direct_action]
+						next_states = [node.parent.state, direct_next_state]
+					else:
+						actions = [direct_action]
+						next_states = [direct_next_state]
+
+				next_dist_to_local_starts = -self.value_fn(np.array([local_start]), np.array(next_states))
+				baseline_dist_to_local_start = -self.value_fn(np.array([local_start]), np.array([node.state]))[0]
+				#action_weights = np.exp(self.policy_temperature * (np.min(next_dist_to_local_goals) - next_dist_to_local_goals))
+				#action_weights /= np.sum(action_weights)
+				action_weights = np.exp(self.policy_temperature * (baseline_dist_to_local_start - (1 + next_dist_to_local_starts)))
+
+				b_states.extend([local_start.state for _ in range(len(actions))])
+				b_actions.extend(actions)
+				b_goals.extend([node.state for _ in range(len(actions))])
+				b_action_weights.extend(action_weights.tolist())
+
+		return (f_states, f_goals, f_actions, f_action_weights), (b_states, b_goals, b_actions, b_action_weights)
 
 if __name__ == "__main__":
 	from envs.pointmass import WallPointEnv
@@ -585,9 +705,11 @@ if __name__ == "__main__":
 		value_fn,
 
 		n_target_samples=1000,
-		temperature=1.0,
+		target_temperature=1.0,
 
 		value_fn_uncertainty=0.05,
+
+		policy_temperature=2.0,
 	)
 
 	for itr in tqdm.tqdm(range(101)):
@@ -598,7 +720,8 @@ if __name__ == "__main__":
 			states, goals, values = rrt.get_value_training_data()
 			# print(states, goals, values)
 			value_fn.optimize(states, goals, values)
-		rrt.get_policy_training_data()
+		(f_states, f_goals, f_actions, f_action_weights), (b_states, b_goals, b_actions, b_action_weights) = \
+			rrt.get_policy_training_data()
 		rrt.clear()
 
 	#rrt.execute_plan(100)
