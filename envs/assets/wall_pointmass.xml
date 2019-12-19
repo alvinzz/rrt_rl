@@ -1,0 +1,40 @@
+<mujoco model="peg_pusher">
+    <compiler inertiafromgeom="true" angle="radian" coordinate="local"/>
+    <option timestep="0.01" gravity="0 0 -1000" iterations="20" integrator="Euler" />
+
+    <asset>
+        <texture builtin="checker" height="100" name="texplane" rgb1="0 0 0" rgb2="0.8 0.8 0.8" type="2d" width="100"/>
+        <material name="MatPlane" reflectance="0.5" shininess="1" specular="1" texrepeat="60 60" texture="texplane"/>
+    </asset>
+
+    <default>
+        <joint armature='0.04' damping="0.001" limited="true"/>
+        <geom friction=".0 .0 .0" density="300" margin="0.002" condim="1" contype="0" conaffinity="0"/>
+    </default>
+
+    <worldbody>
+        <camera name="maincam" mode="fixed" pos="0 0 6" quat="0 0 0 -1"/>
+        <light diffuse=".5 .5 .5" pos="0 0 3" dir="0 0 -1"/>
+        <geom conaffinity="1" condim="3" material="MatPlane" name="floor" pos="0 0 0" rgba="0.8 0.9 0.8 1" size="40 40 40" type="plane"/>
+        <geom conaffinity="1" condim="3" material="MatPlane" name="wall0" pos="0 -2.5 0" euler="-1.5708 0 0" rgba="0.8 0.9 0.8 1" size="40 40 40" type="plane"/>
+        <geom conaffinity="1" condim="3" material="MatPlane" name="wall1" pos="0 2.5 0" euler="1.5708 0 0" rgba="0.8 0.9 0.8 1" size="40 40 40" type="plane"/>
+        <geom conaffinity="1" condim="3" material="MatPlane" name="wall2" pos="-2.5 0 0" euler="0 1.5708 0" rgba="0.8 0.9 0.8 1" size="40 40 40" type="plane"/>
+        <geom conaffinity="1" condim="3" material="MatPlane" name="wall3" pos="2.5 0 0" euler="0 -1.5708 0" rgba="0.8 0.9 0.8 1" size="40 40 40" type="plane"/>
+
+        <body name="wall" pos="0 0 0">
+            <geom type="box" size="0.5 2 1" conaffinity="1" contype="1"/>
+        </body>
+
+        <body name="point" pos="0 0 0">
+            <geom name="point_geom" type="sphere" rgba="1 0 0 1" pos="0 0 0" size="0.1" density="1" conaffinity="1" contype="1"/>
+            <joint name="point_x" type="slide" pos="0 0 0" axis="1 0 0" range="-2.5 2.5"/>
+            <joint name="point_y" type="slide" pos="0 0 0" axis="0 1 0" range="-2.5 2.5"/>
+            <joint name="point_z" type="slide" pos="0 0 0" axis="0 0 1" range="0 1"/>
+        </body>
+    </worldbody>
+
+    <actuator>
+        <motor joint="point_x" ctrlrange="-10 10" ctrllimited="true"/>
+        <motor joint="point_y" ctrlrange="-10 10" ctrllimited="true"/>
+    </actuator>
+</mujoco>

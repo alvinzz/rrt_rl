@@ -1,6 +1,8 @@
 import numpy as np
 import cv2
 import tqdm
+import time
+import torch
 
 class Tree():
 	def __init__(self, start_node):
@@ -49,9 +51,11 @@ class VfPolRrt:
 		n_target_samples=1000,
 		target_temperature=1.0,
 
+		max_to_shortcut=1000,
+
 		value_fn_uncertainty=0.05,
 
-		policy_temperature=2.0,
+		policy_temperature=1.0,
 	):
 		self.env = env
 
@@ -63,6 +67,8 @@ class VfPolRrt:
 
 		self.n_target_samples = n_target_samples
 		self.target_temperature = target_temperature
+
+		self.max_to_shortcut = max_to_shortcut
 
 		self.value_fn_uncertainty = value_fn_uncertainty
 
@@ -117,14 +123,14 @@ class VfPolRrt:
 			self.b_rrts.append(f_target.tree)
 			self.f_rrts.append(b_target.tree)
 
-			f_dist = -1 * self.value_fn(np.array([f_connection.state]), np.array([target_state]))[0]
-			b_dist = -1 * self.value_fn(np.array([target_state]), np.array([b_connection.state]))[0]
+			f_dist = -(1 + self.value_fn_uncertainty) * self.value_fn(np.array([f_connection.state]), np.array([target_state]))[0]
+			b_dist = -(1 + self.value_fn_uncertainty) * self.value_fn(np.array([target_state]), np.array([b_connection.state]))[0]
 			print("f_dist", f_dist)
 			print("b_dist", b_dist)
 
 			f_rrt_node = f_connection
 			target_node = f_target
-			for t in range(max(1, int(np.ceil(f_dist/2)))):
+			for t in range(1 + int(np.ceil(f_dist/2))):
 				f_action = self.f_policy(np.array([f_rrt_node.state]), np.array([target_state]))[0]
 				f_rrt_next_state = self.f_dynamics(np.array([f_rrt_node.state]), np.array([f_action]))[0]
 				f_rrt_node = Node(f_rrt_next_state, f_action, f_rrt_node)
@@ -147,7 +153,7 @@ class VfPolRrt:
 
 			b_rrt_node = b_connection
 			target_node = b_target
-			for t in range(max(1, int(np.ceil(b_dist/2)))):
+			for t in range(1 + int(np.ceil(b_dist/2))):
 				b_action = self.b_policy(np.array([target_state]), np.array([b_rrt_node.state]))[0]
 				b_rrt_next_state = self.b_dynamics(np.array([b_rrt_node.state]), np.array([b_action]))[0]
 				b_rrt_node = Node(b_rrt_next_state, b_action, b_rrt_node)
@@ -186,8 +192,11 @@ class VfPolRrt:
 		goal_node_idx = all_nodes.index(self.goal_node)
 		all_nodes.pop(goal_node_idx)
 		all_nodes.insert(0, self.goal_node)
+		if len(all_nodes) > self.max_to_shortcut:
+			idxs = np.random.choice(np.arange(len(all_nodes)), size=self.max_to_shortcut, replace=False)
+			all_nodes = [all_nodes[idx] for idx in sorted(idxs)]
 		for (idx, node) in enumerate(all_nodes):
-			if node is self.goal_node:
+			if idx == 0:
 				continue
 			proposed_connections = all_nodes[:idx]
 			proposed_connection_states = np.array([node.state for node in proposed_connections])
@@ -224,8 +233,11 @@ class VfPolRrt:
 		start_node_idx = all_nodes.index(self.start_node)
 		all_nodes.pop(start_node_idx)
 		all_nodes.insert(0, self.start_node)
+		if len(all_nodes) > self.max_to_shortcut:
+			idxs = np.random.choice(np.arange(len(all_nodes)), size=self.max_to_shortcut, replace=False)
+			all_nodes = [all_nodes[idx] for idx in sorted(idxs)]
 		for (idx, node) in enumerate(all_nodes):
-			if node is self.start_node:
+			if idx == 0:
 				continue
 			proposed_connections = all_nodes[:idx]
 			proposed_connection_states = np.array([node.state for node in proposed_connections])
@@ -411,19 +423,52 @@ class VfPolRrt:
 
 		return target_state, f_connection, b_connection
 
-	def execute_plan(self, max_horizon=100):
+	def execute_plan(self, display=False):
+		# max_horizon = 1000
+		max_horizon = 1 + int(np.ceil((1 + self.value_fn_uncertainty) * -value_fn(np.array([self.start_node.state]), np.array([self.goal_node.state]))[0]))
+		rolling_avg_horizon = 1 + int(np.ceil(max_horizon * self.value_fn_uncertainty))
+
 		self.env.reset(self.start_node.state)
+		states = []
+		actions = []
+		next_states = []
+
 		current_node = self.start_node
 		t = 0
-		self.env.render()
-		while -1 * value_fn(np.array([current_node.state]), np.array([self.goal_node.state]))[0] >= 1 and \
-			t < 100:
-
-			action = self.f_policy(np.array([current_node.state]), np.array([current_node.b_connection.state]))[0]
-			# print(action)
-			next_state = env.step(action)[0]
-			# print(next_state)
+		if display:
 			self.env.render()
+			time.sleep(0.01)
+
+		dists_buffer = []
+
+		def stop_cond():
+			cur_dist = -1 * value_fn(np.array([current_node.state]), np.array([self.goal_node.state]))[0]
+			dists_buffer.append(cur_dist)
+
+			timeout = (t >= max_horizon)
+			near_goal = (cur_dist < 0.5)
+			if len(dists_buffer) < 2*rolling_avg_horizon:
+				no_progress = False
+			else:
+				no_progress = (np.mean(dists_buffer[-rolling_avg_horizon:]) >= \
+					np.mean(dists_buffer[-2*rolling_avg_horizon:-rolling_avg_horizon]))
+
+			# return timeout
+			return (timeout or near_goal or no_progress)
+
+		while not stop_cond():
+			states.append(current_node.state)
+			action = self.f_policy(np.array([current_node.state]), np.array([current_node.b_connection.state]))[0]
+			actions.append(action)
+			print("state:", current_node.state)
+			print("b_connection:", current_node.b_connection.state)
+			print("action:", action)
+			next_state = env.step(action)[0]
+			next_states.append(next_state)
+			# print(next_state)
+			if display:
+				self.env.render()
+				time.sleep(0.01)
 
 			current_node = Node(next_state, action, current_node)
 
@@ -434,22 +479,30 @@ class VfPolRrt:
 			all_node_states = np.array([node.state for node in all_nodes])
 			b_connection_dists = -(1 + self.value_fn_uncertainty) * \
 				value_fn(np.array([current_node.state]), all_node_states)
+			b_connection_dists = np.maximum(1 + self.value_fn_uncertainty, b_connection_dists)
 			b_connection_dist_to_goals = np.array([node.dist_to_goal for node in all_nodes])
 			dist_to_goals = b_connection_dists + b_connection_dist_to_goals
+
 			min_dist_to_goal = np.min(dist_to_goals) # get min dist to start
 			candidate_idxs = list(filter(lambda idx: dist_to_goals[idx] < min_dist_to_goal + 1., range(len(all_nodes)))) # get connection_nodes within 1 of min_dist_to_goal
-			min_connection_dist = max(1., np.min(b_connection_dists[candidate_idxs])) # of those connection_nodes, get the min connection_dist
-			candidate_idxs = list(filter(lambda idx: b_connection_dists[idx] <= min_connection_dist, candidate_idxs)) # get connection_nodes with min_connection_dist
+			min_connection_dist = np.min(b_connection_dists[candidate_idxs]) # of those connection_nodes, get the min connection_dist
+			candidate_idxs = filter(lambda idx: b_connection_dists[idx] <= min_connection_dist, candidate_idxs) # get connection_nodes with min_connection_dist
 			b_connection_idx = min(candidate_idxs, key=lambda idx: dist_to_goals[idx]) # of those connection_nodes, select the minimum dist_to_goal
+
 			b_connection = all_nodes[b_connection_idx]
 			dist_to_goal = dist_to_goals[b_connection_idx]
 
 			current_node.b_connection = b_connection
 			current_node.dist_to_goal = dist_to_goal
+			current_node.f_connection = current_node.parent
+			current_node.dist_to_start = current_node.parent.dist_to_start + 1
 
 			t += 1
 
-		self.env.close()
+		if display:
+			self.env.close()
+
+		return np.array(states), np.array(actions), np.array(next_states)
 
 	def get_value_training_data(self):
 		states = []
@@ -513,15 +566,15 @@ class VfPolRrt:
 			# print([node.state for node in f_path])
 			# print(f_dists)
 			states.append(node.state)
-			idx = np.random.randint(len(path))
-			goals.append(path[idx].state)
-			values.append(-dists[idx])
+			idx = np.random.randint(len(f_path))
+			goals.append(f_path[idx].state)
+			values.append(-f_dists[idx])
 
 			b_path, b_dists = get_path_to_start(node)
-			idx = np.random.randint(len(path))
-			states.append(path[idx].state)
+			idx = np.random.randint(len(b_path))
+			states.append(b_path[idx].state)
 			goals.append(node.state)
-			values.append(-dists[idx])
+			values.append(-b_dists[idx])
 
 		return np.array(states), np.array(goals), np.array(values)
 
@@ -542,12 +595,13 @@ class VfPolRrt:
 				descendant_states = np.array([descendant.state for descendant in descendants_list])
 
 				if forward:
-					baseline_dists = self.value_fn(np.array([node.state]), descendant_states)
+					baseline_dists = -self.value_fn(np.array([node.state]), descendant_states)
 				else:
-					baseline_dists = self.value_fn(descendant_states, np.array([node.state]))
+					baseline_dists = -self.value_fn(descendant_states, np.array([node.state]))
 				descendant_depths = [descendant.depth for descendant in descendants_list]
 				descendant_dists = np.array(descendant_depths) - node.depth
-				action_weights = np.exp(self.policy_temperature * (baseline_dists - descendant_dists))
+				# action_weights = np.exp(self.policy_temperature * np.minimum(1.0, (baseline_dists - descendant_dists)))
+				action_weights = self.policy_temperature * np.clip(baseline_dists - descendant_dists, -1.0, 1.0)
 
 				if forward:
 					f_states.extend([node.state for _ in range(len(descendants_list))])
@@ -562,7 +616,7 @@ class VfPolRrt:
 				else:
 					b_states.extend([descendant.state for descendant in descendants_list])
 					b_goals.extend([node.state for _ in range(len(descendants_list))])
-					b_actions.extend([node.action for _ in range(len(descendants_list))])
+					b_actions.extend([child.action for _ in range(len(descendants_list))])
 					b_action_weights.extend(action_weights.tolist())
 
 					f_states.extend([descendant.state for descendant in descendants_list])
@@ -577,9 +631,6 @@ class VfPolRrt:
 		for rrt in self.b_rrts:
 			add_node(rrt.root, forward=False)
 
-		for (s, f, a) in zip(f_states, f_goals, f_actions):
-			print(s, f, a)
-
 		f_nodes, b_nodes = self.get_all_nodes()
 		all_nodes = f_nodes + b_nodes
 
@@ -589,6 +640,7 @@ class VfPolRrt:
 			while current_node is not self.goal_node:
 				next_node = current_node.b_connection
 				path.append(next_node)
+				current_node = next_node
 			return path
 
 		def get_path_to_start(node):
@@ -597,6 +649,7 @@ class VfPolRrt:
 			while current_node is not self.start_node:
 				next_node = current_node.f_connection
 				path.append(next_node)
+				current_node = next_node
 			return path
 
 		for node in all_nodes:
@@ -614,17 +667,18 @@ class VfPolRrt:
 					next_states = [child.state for child in node.children] + [direct_next_state]
 				else:
 					if node.parent:
-						actions = [node.parent.action, direct_action]
+						actions = [node.action, direct_action]
 						next_states = [node.parent.state, direct_next_state]
 					else:
 						actions = [direct_action]
 						next_states = [direct_next_state]
 
-				next_dist_to_local_goals = -self.value_fn(np.array(next_states), np.array([local_goal]))
-				baseline_dist_to_local_goal = -self.value_fn(np.array([node.state]), np.array([local_goal]))[0]
+				next_dist_to_local_goals = -self.value_fn(np.array(next_states), np.array([local_goal.state]))
+				baseline_dist_to_local_goal = -self.value_fn(np.array([node.state]), np.array([local_goal.state]))[0]
 				#action_weights = np.exp(self.policy_temperature * (np.min(next_dist_to_local_goals) - next_dist_to_local_goals))
 				#action_weights /= np.sum(action_weights)
-				action_weights = np.exp(self.policy_temperature * (baseline_dist_to_local_goal - (1 + next_dist_to_local_goals)))
+				#action_weights = np.exp(self.policy_temperature * np.minimum(1.0, (baseline_dist_to_local_goal - (1 + next_dist_to_local_goals))))
+				action_weights = self.policy_temperature * np.clip(baseline_dist_to_local_goal - next_dist_to_local_goals, -1.0, 1.0)
 
 				f_states.extend([node.state for _ in range(len(actions))])
 				f_actions.extend(actions)
@@ -642,17 +696,18 @@ class VfPolRrt:
 					next_states = [child.state for child in node.children] + [direct_next_state]
 				else:
 					if node.parent:
-						actions = [node.parent.action, direct_action]
+						actions = [node.action, direct_action]
 						next_states = [node.parent.state, direct_next_state]
 					else:
 						actions = [direct_action]
 						next_states = [direct_next_state]
 
-				next_dist_to_local_starts = -self.value_fn(np.array([local_start]), np.array(next_states))
-				baseline_dist_to_local_start = -self.value_fn(np.array([local_start]), np.array([node.state]))[0]
+				next_dist_to_local_starts = -self.value_fn(np.array([local_start.state]), np.array(next_states))
+				baseline_dist_to_local_start = -self.value_fn(np.array([local_start.state]), np.array([node.state]))[0]
 				#action_weights = np.exp(self.policy_temperature * (np.min(next_dist_to_local_goals) - next_dist_to_local_goals))
 				#action_weights /= np.sum(action_weights)
-				action_weights = np.exp(self.policy_temperature * (baseline_dist_to_local_start - (1 + next_dist_to_local_starts)))
+				#action_weights = np.exp(self.policy_temperature * np.minimum(1.0, (baseline_dist_to_local_start - (1 + next_dist_to_local_starts))))
+				action_weights = self.policy_temperature * np.clip(baseline_dist_to_local_start - next_dist_to_local_starts, -1.0, 1.0)
 
 				b_states.extend([local_start.state for _ in range(len(actions))])
 				b_actions.extend(actions)
@@ -661,22 +716,50 @@ class VfPolRrt:
 
 		return (f_states, f_goals, f_actions, f_action_weights), (b_states, b_goals, b_actions, b_action_weights)
 
+	def get_dynamics_training_data(self):
+		states = []
+		actions = []
+		next_states = []
+
+		def add_node(node, forward):
+			if forward:
+				for child in node.children:
+					if self.env.valid_state(node.state):
+						states.append(node.state)
+						self.env.reset(node.state)
+						actions.append(child.action)
+						next_states.append(env.step(child.action)[0])
+			else:
+				for child in node.children:
+					if self.env.valid_state(child.state):
+						states.append(child.state)
+						self.env.reset(child.state)
+						actions.append(child.action)
+						next_states.append(env.step(child.action)[0])
+
+		for rrt in self.f_rrts:
+			add_node(rrt.root, forward=True)
+		for rrt in self.b_rrts:
+			add_node(rrt.root, forward=False)
+
+		return np.array(states), np.array(actions), np.array(next_states)
+
 if __name__ == "__main__":
 	from envs.pointmass import WallPointEnv
 	env = WallPointEnv()
 
-	start_state = np.array([-2., -2.])
+	start_state = np.array([-2, -2.])
 	goal_state = np.array([2., 2.])
 
-	def f_policy(s, g):
-		a = g - s
-		a /= np.maximum(np.ones(a.shape[0]), (np.linalg.norm(a, axis=-1) + 1e-8))
-		return a
+	# # def f_policy(s, g):
+	# # 	a = g - s
+	# # 	a /= np.maximum(np.ones(a.shape[0]), (np.linalg.norm(a, axis=-1) + 1e-8))
+	# # 	return a
 
-	def b_policy(s, g):
-		a = g - s
-		a /= np.maximum(np.ones(a.shape[0]), (np.linalg.norm(a, axis=-1) + 1e-8))
-		return a
+	# # def b_policy(s, g):
+	# # 	a = g - s
+	# # 	a /= np.maximum(np.ones(a.shape[0]), (np.linalg.norm(a, axis=-1) + 1e-8))
+	# # 	return a
 
 	def f_dynamics(s, a):
 		res = []
@@ -692,10 +775,15 @@ if __name__ == "__main__":
 			res.append(env.step(-a[i])[0])
 		return np.array(res)
 
-	#def value_fn(s, s_prime):
-	#	return -np.linalg.norm(s - s_prime, axis=-1)
-	from nn import ValueFn
+	# #def value_fn(s, s_prime):
+	# #	return -np.linalg.norm(s - s_prime, axis=-1)
+
+	from nn import ValueFn, Policy, Dynamics
 	value_fn = ValueFn([4, 100, 100, 1])
+	f_policy = Policy([4, 100, 100, 4])
+	b_policy = Policy([4, 100, 100, 4])
+	f_dynamics = Dynamics([4, 100, 100, 2])
+	b_dynamics = Dynamics([4, 100, 100, 2])
 
 	rrt = VfPolRrt(
 		env,
@@ -707,22 +795,69 @@ if __name__ == "__main__":
 		n_target_samples=1000,
 		target_temperature=1.0,
 
-		value_fn_uncertainty=0.05,
+		max_to_shortcut=1e8, # this can give infinite loop, dont use
 
-		policy_temperature=2.0,
+		value_fn_uncertainty=0.2,
+
+		policy_temperature=10.0,
 	)
 
-	for itr in tqdm.tqdm(range(101)):
-		display = (itr % 10 == 0)
-		rrt.build_rrt(10, display)
-		for inner in range(10):
+	states_buffer = np.zeros([0, 2])
+	actions_buffer = np.zeros([0, 2])
+	next_states_buffer = np.zeros([0, 2])
+
+	# value_fn.load_state_dict(torch.load("models/value_fn_1000"))
+	# f_policy.load_state_dict(torch.load("models/f_policy_1000"))
+	# b_policy.load_state_dict(torch.load("models/b_policy_1000"))
+	# f_dynamics.load_state_dict(torch.load("models/f_dynamics_1000"))
+	# b_dynamics.load_state_dict(torch.load("models/b_dynamics_1000"))
+
+	# rrt.build_rrt(3, True)
+	# rrt.execute_plan(True)
+	# print(1/0)
+
+	for itr in tqdm.tqdm(range(1, 1001)):
+		display = (itr % 1000 == 0)
+
+		rrt.build_rrt(3, display)
+		rrt.execute_plan(display)
+
+		for inner in range(1):
 			rrt.get_node_distances()
 			states, goals, values = rrt.get_value_training_data()
+			# for (s, g, v) in zip(states, goals, values):
+			# 	print(s, g, v)
 			# print(states, goals, values)
-			value_fn.optimize(states, goals, values)
+			rrt.value_fn.optimize(states, goals, values)
+
+		rrt.get_node_distances()
 		(f_states, f_goals, f_actions, f_action_weights), (b_states, b_goals, b_actions, b_action_weights) = \
 			rrt.get_policy_training_data()
+		#for (s, g, a, aw) in zip(f_states, f_goals, f_actions, f_action_weights):
+		#	print(s, g, a, aw)
+		# for (s, g, a, aw) in zip(b_states, b_goals, b_actions, b_action_weights):
+		# 	print(s, g, a, aw)
+		#rrt.f_policy.optimize(f_states, f_goals, f_actions, rrt.value_fn, rrt.f_dynamics, rrt.policy_temperature, True)
+		#rrt.b_policy.optimize(b_states, b_goals, b_actions, rrt.value_fn, rrt.b_dynamics, rrt.policy_temperature, False)
+		for inner in range(1):
+			rrt.f_policy.optimize(f_states, f_goals, f_actions, f_action_weights)
+			rrt.b_policy.optimize(b_states, b_goals, b_actions, b_action_weights)
+
+		#rrt.execute_plan(display)
+		states, actions, next_states = rrt.get_dynamics_training_data()
+		if states.shape[0]:
+			states_buffer = np.concatenate([states_buffer, states], axis=0)[:10000]
+			actions_buffer = np.concatenate([actions_buffer, actions], axis=0)[:10000]
+			next_states_buffer = np.concatenate([next_states_buffer, next_states], axis=0)[:10000]
+		if states_buffer.shape[0]:
+			for inner in range(1):
+				rrt.f_dynamics.optimize(states_buffer, actions_buffer, next_states_buffer)
+				rrt.b_dynamics.optimize(next_states_buffer, actions_buffer, states_buffer)
+
 		rrt.clear()
 
-	#rrt.execute_plan(100)
-    # needed to train dynamics, however, use GT dynamics for now...
+		torch.save(rrt.value_fn.state_dict(), "models/value_fn_{}".format(itr))
+		torch.save(rrt.f_policy.state_dict(), "models/f_policy_{}".format(itr))
+		torch.save(rrt.b_policy.state_dict(), "models/b_policy_{}".format(itr))
+		torch.save(rrt.f_dynamics.state_dict(), "models/f_dynamics_{}".format(itr))
+		torch.save(rrt.b_dynamics.state_dict(), "models/b_dynamics_{}".format(itr))
